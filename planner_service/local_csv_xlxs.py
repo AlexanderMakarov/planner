@@ -7,6 +7,7 @@ import typing
 
 
 DUMP_FILEPATH = "dump.csv"
+RESULT_FILEPATH = "result.csv"
 logging.basicConfig(level=logging.DEBUG)
 
 
@@ -79,15 +80,42 @@ def read_ets_dumps_and_merge(folder_path: str) -> pd.DataFrame:
         )
         # Drop empty rows and not interesting columns.
         new_data: pd.DataFrame = v.dropna().drop(set(v.columns) - result_columns, axis=1)
-        # Rename date column to 'd'.
-        new_data.rename(columns={date_column: 'd'}, inplace=True)
+        # Rename date column to 'ds'.
+        new_data.rename(columns={date_column: 'ds'}, inplace=True)
         data = data.append(new_data, ignore_index=True)
         logging.debug(f"Merged {len(new_data)} rows from '{k}' file into common dataframe with {len(data)} rows now."
                       f" Columns {list(new_data.columns)} -> {list(data.columns)}.")
-    data.sort_values(by='d', inplace=True)
+    data.sort_values(by='ds', inplace=True)
     logging.info(f"Parsed {list(data.columns)} columns and {len(data)} rows from '{folder_path}' files'.")
     logging.debug(data.describe)
     return data
+
+
+def get_project_cn(data: pd.DataFrame) -> str:
+    return [x for x in list(data.columns) if x.lower() == 'project-task']
+
+
+def get_effort_cn(data: pd.DataFrame) -> str:
+    return [x for x in list(data.columns) if x.lower() == 'effort']
+
+
+def extract_units(data: pd.DataFrame) -> typing.List[str]:
+    return data[get_project_cn(data)].unique().to_list()
+
+
+def run_prophet(data: pd.DataFrame, date: str) -> float:
+    pass
+
+
+def predict_unit(df: pd.DataFrame, date: str, threshold: float) -> typing.Optional[pd.Index]:
+    effort_cn = get_effort_cn(df)
+    data = df.loc[:, ['ds']]
+    data['y'] = 1.0
+    if run_prophet(data, date) < threshold:
+        return None
+    data = df.loc[:, ['ds', effort_cn]]
+    data.rename(axis=1, columns={effort_cn: 'y'})
+    return run_prophet(data, date)
 
 
 if __name__ == "__main__":
@@ -99,4 +127,31 @@ if __name__ == "__main__":
     else:
         data = pd.read_csv(DUMP_FILEPATH, header=0)
     print(data.head)
-
+    # Idea to predict ETS is follow:
+    # 1) Divide rows on 'predict units' by project and description (by complexity stages)
+    #       a) only project
+    #       b) project + description
+    #       c) project + common part of description (like "abc" and "abd" are same, but "cab" and "abc" are different)
+    # 2) Predict probability of each 'predict unit' on new day. Remove units by some threshold.
+    # 3) Predict effort of selected units on this day.
+    dates_to_predict = ['2021-01-06', '2021-01-08', '2021-01-11', '2021-01-12', '2021-01-13']
+    # a option
+    units = extract_units(data)
+    prediction = pd.DataFrame()
+    project_cn = get_effort_cn(data)
+    effort_cn = get_effort_cn(data)
+    unit_histories = dict(((unit, data.loc[data[project_cn] == unit]) for unit in units))
+    for date in dates_to_predict:
+        day_prediction = []
+        for unit, unit_data in unit_histories.items():
+            y = predict_unit(unit_data, date, 0.8)
+            if y is not None:
+                day_prediction.append({
+                    project_cn: unit,
+                    effort_cn: y,
+                    'Date': date,
+                })
+        logging.debug(f"{date}: predicted {len(day_prediction)} rows")
+        prediction.append(day_prediction)
+    logging.info(prediction.describe)
+    prediction.to_csv(RESULT_FILEPATH, header=True)

@@ -1,0 +1,47 @@
+Project-Task,Effort,Description,Date
+IntApp Pricing.Communication,1.00,Scrum meeting. Discussed tasks with team.,2021-01-06
+IntApp Pricing.Code Review,2.00,Made code-review for DTE-19645 code.,2021-01-06
+IntApp Pricing.Code Review,2.00,Made code-review for DTE-19645 tests. Investigated ticket and related wiki for details.,2021-01-06
+IntApp Pricing.Code Review,1.00,Made code-review for DTE-20592. Investigated and asked for details ticket description.,2021-01-06
+IntApp Pricing.Code Review,0.50,Made code-review for DTE-19935.,2021-01-06
+IntApp Pricing.Investigation,0.50,Investigated issue with useless changeSet-s in ODS release commit. Discussed with team. Added point to retrospective.,2021-01-06
+IntApp Pricing.Development,1.00,Completed tests for PPT-5373.,2021-01-06
+IntApp Pricing.Development,1.00,Updated pricing-dev-environment to new Intapp OpenDistro 1.12.1 Docker image.,2021-01-06
+
+IntApp Pricing.Communication,1.00,Scrum meeting. Discussed tasks with team.,2021-01-08
+IntApp Pricing.Communication,0.50,Explained my fears and considerations in PLT-9954.,2021-01-08
+IntApp Pricing.Code Review,1.00,Made code-review for DTE-19935.,2021-01-08
+IntApp Pricing.Communication,0.25,Updated JIRA tasks related to ES cluster update.,2021-01-08
+IntApp Pricing.Communication,1.00,Discussed ES migration with Andrii Petruchek. Shared meeting summary in DEVOPS-4168. Discussed with IV.,2021-01-08
+IntApp Pricing.Code Review,0.50,Made code review for DTE-20592.,2021-01-08
+IntApp Pricing.Code Review,2.00,Made code review for DTE-19645.,2021-01-08
+IntApp Pricing.Code Review,0.50,Discussed DTE-19645 solutions with AF in MR.,2021-01-08
+IntApp Pricing.Code Review,1.00,Made code review for TPI changes in Pricing services explained in PPT-5243.,2021-01-08
+IntApp Pricing.Communication,0.50,Story Time meeting.,2021-01-08
+
+IntApp Pricing.Communication,1.25,Scrum, Release Review meetings. Discussed tasks with team.,2021-01-11
+IntApp Pricing.Communication,0.50,Explained my point in PLT-9954 comment.,2021-01-11
+IntApp Pricing.Code Review,2.00,Made code-review for DTE-19645.,2021-01-11
+IntApp Pricing.Communication,1.00,Discussed DTE-19645 review with AF.,2021-01-11
+IntApp Pricing.Communication,0.75,Story time meeting. Prepared to it.,2021-01-11
+IntApp Pricing.Communication,1.00,Enforcer Scrum meeting.,2021-01-11
+IntApp Pricing.Investigation,0.50,Investigated existing EDNA ES indices. Removed obsolete ones.,2021-01-11
+IntApp Pricing.Investigation,1.00,Prepared restore EDNA ES data steps for ES shared cluster update. Discussed with IV. Posted it in DEVOPS-4168.,2021-01-11
+IntApp Pricing.Development,2.00,Prepared DateTimeProvider for DTE-19645. Fixed some minor issues. Found issue with NPE on TermsSync job call for old tenants.,2021-01-11
+
+IntApp Pricing.Communication,0.75,Scrum meetings. Discussed tasks with team.,2021-01-12
+IntApp Pricing.Investigation,2.00,Investigated issue with 500 and 403 errors in IndexConstructor in DEV. Filed PPT-5403 and PPT-5404.,2021-01-12
+IntApp Pricing.Code Review,2.00,Made code-review for DTE-20592. Prepared table of possible "inherited" states for Terms messages and discussed it with AF.,2021-01-12
+IntApp Pricing.Communication,1.00,Discussed ES users storing in Vault with Andrii Petruchek.,2021-01-12
+IntApp Pricing.Investigation,0.50,Investigated Jenkins failures during TPI verification in pr4. Filed PPT-5402.,2021-01-12
+IntApp Pricing.Investigation,1.25,Investigated Pricing services status after TPI changes. Discussed with Sergii Iurchenko and AD.,2021-01-12
+
+IntApp Pricing.Communication,1.50,Scrum, Relese Planning meetings. Discussed tasks with team.,2021-01-13
+IntApp Pricing.Investigation,1.50,Investigated DSD-4 and proposed structure. Left comments in them.,2021-01-13
+IntApp Pricing.Code Review,0.75,Made code review for DTE-20592.,2021-01-13
+IntApp Pricing.Code Review,2.00,Made code review for DTE-19645.,2021-01-13
+IntApp Pricing.Communication,0.50,Story Time meeting. Prepared to it.,2021-01-13
+IntApp Pricing.Communication,0.50,Enforcer Scrum meeting.,2021-01-13
+IntApp Pricing.Communication,1.50,Meeting with Sergii Iurchenko and Andrii Petruchek about Vault ES secrets structure.,2021-01-13
+IntApp Pricing.Investigation,0.50,Updated Vault storage for CM sec in dev environments.,2021-01-13
+IntApp Pricing.Communication,0.25,Started prepare "Genus structure and how to integrate with it" presentation.,2021-01-13
