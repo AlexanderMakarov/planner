@@ -80,8 +80,9 @@ def read_ets_dumps_and_merge(folder_path: str) -> pd.DataFrame:
         )
         # Drop empty rows and not interesting columns.
         new_data: pd.DataFrame = v.dropna().drop(set(v.columns) - result_columns, axis=1)
-        # Rename date column to 'ds'.
-        new_data.rename(columns={date_column: 'ds'}, inplace=True)
+        # Prepared date column and name it 'ds'.
+        new_data['ds'] = pd.DatetimeIndex(new_data[date_column])
+        new_data.drop(columns=[date_column], axis=1, inplace=True)
         data = data.append(new_data, ignore_index=True)
         logging.debug(f"Merged {len(new_data)} rows from '{k}' file into common dataframe with {len(data)} rows now."
                       f" Columns {list(new_data.columns)} -> {list(data.columns)}.")
@@ -92,19 +93,19 @@ def read_ets_dumps_and_merge(folder_path: str) -> pd.DataFrame:
 
 
 def get_project_cn(data: pd.DataFrame) -> str:
-    return [x for x in list(data.columns) if x.lower() == 'project-task']
+    return next((x for x in list(data.columns) if x.lower() == 'project-task'))
 
 
 def get_effort_cn(data: pd.DataFrame) -> str:
-    return [x for x in list(data.columns) if x.lower() == 'effort']
+    return next((x for x in list(data.columns) if x.lower() == 'effort'))
 
 
 def extract_units(data: pd.DataFrame) -> typing.List[str]:
-    return data[get_project_cn(data)].unique().to_list()
+    return data[get_project_cn(data)].unique()
 
 
 def run_prophet(data: pd.DataFrame, date: str) -> float:
-    pass
+    pass  # See jupiter "ets"
 
 
 def predict_unit(df: pd.DataFrame, date: str, threshold: float) -> typing.Optional[pd.Index]:
@@ -130,17 +131,20 @@ if __name__ == "__main__":
     # Idea to predict ETS is follow:
     # 1) Divide rows on 'predict units' by project and description (by complexity stages)
     #       a) only project
-    #       b) project + description
-    #       c) project + common part of description (like "abc" and "abd" are same, but "cab" and "abc" are different)
+    #       b) only project and filter out old data ("only 15 events if recent" kinda rules)
+    #       c) project + description + filtering
+    #       d) project + common part of description (like "abc" and "abd" are same, but "cab" and "abc" are different)
     # 2) Predict probability of each 'predict unit' on new day. Remove units by some threshold.
     # 3) Predict effort of selected units on this day.
     dates_to_predict = ['2021-01-06', '2021-01-08', '2021-01-11', '2021-01-12', '2021-01-13']
     # a option
     units = extract_units(data)
     prediction = pd.DataFrame()
-    project_cn = get_effort_cn(data)
+    project_cn = get_project_cn(data)
     effort_cn = get_effort_cn(data)
-    unit_histories = dict(((unit, data.loc[data[project_cn] == unit]) for unit in units))
+    # TODO to 'b' need to aggregated more accuratelly.
+    unit_histories = data.groupby(project_cn)[effort_cn].sum()  # BUT need dates as well!
+
     for date in dates_to_predict:
         day_prediction = []
         for unit, unit_data in unit_histories.items():
