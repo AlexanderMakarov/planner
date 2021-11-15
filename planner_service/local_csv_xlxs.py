@@ -4,6 +4,9 @@ import sys
 import datetime
 import logging
 import typing
+import difflib
+import prophet
+
 
 
 DUMP_FILEPATH = "dump.csv"
@@ -52,37 +55,54 @@ def find_date_column(columns: typing.List[str]) -> str:
     return sorted(columns_with_word, key=columns_with_word.get, reverse=True)[0]
 
 
-def extract_columns_to_timeseries_predict(cols: typing.List[str], cols_to_predict: typing.List[str]) ->\
-                                          typing.Tuple[typing.Set[str], str]:
-    result_columns  = set()
+def extract_columns_to_timeseries_predict(cols: typing.List[str], cols_to_predict: typing.List[str])\
+                                          -> typing.List[str]:
+    """
+    Finds out columns from dataframe. Returns them in order to rename into supported names.
+    :param cols: list of datafram columns in order to work with.
+    :param cols_to_predict: list of supported 'not date' lowercases columns in order.
+    :returns: - list of supportd column names with last 'date' column.
+    """
+    result  = []
     # Take columns to predict and fill up remained columns to find "date" column from.
     contenders = []
-    for col in cols:
+    for i, col in enumerate(cols):
         if col.lower() in cols_to_predict:
-            result_columns.add(col)
+            result.append(col)
+            continue
         else:
             contenders.append(col)
-    assert result_columns,\
+    assert result,\
            f"Can't find columns to predict: expected at least one from {cols_to_predict} to be in {cols}."
     # Find 'date' column.
     date_column = find_date_column(contenders)
     assert date_column, f"Can't find 'date' column in {contenders}."
-    result_columns.add(date_column)
-    return result_columns, date_column
+    result.append(date_column)
+    return result
 
 
 def read_ets_dumps_and_merge(folder_path: str) -> pd.DataFrame:
     dumps = read_ets_dumps(folder_path)
     data = pd.DataFrame()
+    supported_columns = ['project-task', 'effort', 'description']
     for k, v in dumps.items():
-        result_columns, date_column = extract_columns_to_timeseries_predict(
-            list(v.columns), ['project-task', 'effort', 'description']
+        result_columns = extract_columns_to_timeseries_predict(
+            list(v.columns), supported_columns
         )
         # Drop empty rows and not interesting columns.
-        new_data: pd.DataFrame = v.dropna().drop(set(v.columns) - result_columns, axis=1)
-        # Prepared date column and name it 'ds'.
-        new_data['ds'] = pd.DatetimeIndex(new_data[date_column])
-        new_data.drop(columns=[date_column], axis=1, inplace=True)
+        new_data: pd.DataFrame = v.dropna().drop(set(v.columns) - set(result_columns), axis=1)
+        # Convert date column and rename it 'ds'.
+        new_data['ds'] = pd.DatetimeIndex(new_data[result_columns[-1]])
+        new_data.drop(columns=[result_columns[-1]], axis=1, inplace=True)
+        # Rename columns into supported names.
+        new_data.rename(
+            columns={
+                result_columns[0]: 'task',
+                result_columns[1]: 'effort',
+                result_columns[2]: 'description',
+            },
+            inplace=True
+        )
         data = data.append(new_data, ignore_index=True)
         logging.debug(f"Merged {len(new_data)} rows from '{k}' file into common dataframe with {len(data)} rows now."
                       f" Columns {list(new_data.columns)} -> {list(data.columns)}.")
@@ -91,32 +111,97 @@ def read_ets_dumps_and_merge(folder_path: str) -> pd.DataFrame:
     logging.debug(data.describe)
     return data
 
+class Tokenizer:
 
-def get_project_cn(data: pd.DataFrame) -> str:
-    return next((x for x in list(data.columns) if x.lower() == 'project-task'))
+    def __init__(self, df:pd.DataFrame):
+        self.df = df
+
+    def get_unit_histories(self) -> typing.Dict[typing.Any, pd.DataFrame]:
+        raise NotImplemented()
+
+    def expand_unit_prediction(self, unit: typing.Any, y: float) -> dict:
+        raise NotImplemented()
+
+    def unit_to_str(self, unit: typing.Any) -> str:
+        return str(unit)
+
+    def dump_unit_histories(self, unit_histories: typing.Dict[typing.Any, pd.DataFrame]):
+        for unit, df in unit_histories.items():
+            df.to_csv(self.unit_to_str(unit) + ".csv", header=True)
+
+    def _separate_by_task(self):
+        tasks = self.df['task'].unique()
+        return dict((x, self.df[self.df['task'] == x]) for x in tasks)
 
 
-def get_effort_cn(data: pd.DataFrame) -> str:
-    return next((x for x in list(data.columns) if x.lower() == 'effort'))
+class SameDescriptionTokenizer(Tokenizer):
+    """
+    Simple tokens matcher with "same task and description".
+    2020 Jan+Dec AM dataset - only 5 tokens with > 4 items.
+    """
+
+    def __init__(self, df: pd.DataFrame):
+        super().__init__(df)
+
+    def get_unit_histories(self) -> typing.Dict[str, pd.DataFrame]:
+        result = dict()
+        for task, df in self._separate_by_task().items():
+            for desc in df['description'].unique():
+                result[(task, desc)] = df[df['description'] == desc]
+        return result
+
+    def expand_unit_prediction(self, unit, y: float) -> dict:
+        return {
+            'task': unit[0],
+            'effort': y,
+            'description': unit[1]
+        }
+
+class SimilarDescriptionTokenizer(Tokenizer):
+
+    def __init__(self, df: pd.DataFrame):
+        super().__init__(df)
+
+    def find_similar_descriptions(df: pd.DataFrame) -> typing.List[str]:
+        return None
+
+    def get_unit_histories(self) -> typing.Dict[str, pd.DataFrame]:
+        result = dict()
+        for task, df in self._separate_by_task():
+            # TODO
+            # https://github.com/seatgeek/thefuzz
+            # https://docs.python.org/3/library/difflib.html
+            # df[df['var1'].str.contains('A|B')] - filter by "contains A or B"
+            for desc in self.find_similar_descriptions(df):
+                result[(task, desc), df[df['description'].str.startswith(desc)]]
+        return result
 
 
-def extract_units(data: pd.DataFrame) -> typing.List[str]:
-    return data[get_project_cn(data)].unique()
+def timeit(name:str, func, *args) -> typing.Any:
+    start_time = datetime.datetime.now()
+    result = func(*args)
+    logging.debug(f"{name} took {datetime.datetime.now() - start_time}.")
 
 
-def run_prophet(data: pd.DataFrame, date: str) -> float:
+def run_prophet(df: pd.DataFrame, date: str) -> float:
+    m = prophet.Prophet().fit(df)
     pass  # See jupiter "ets"
 
 
-def predict_unit(df: pd.DataFrame, date: str, threshold: float) -> typing.Optional[pd.Index]:
-    effort_cn = get_effort_cn(df)
-    data = df.loc[:, ['ds']]
-    data['y'] = 1.0
-    if run_prophet(data, date) < threshold:
+def predict_unit(data: pd.DataFrame, date: str, y_col:str, threshold: float) -> typing.Optional[pd.Index]:
+    # Don't predict for less than 2 data points.
+    if len(data) < 2:
         return None
-    data = df.loc[:, ['ds', effort_cn]]
-    data.rename(axis=1, columns={effort_cn: 'y'})
-    return run_prophet(data, date)
+    # Predict probability of unit for this day and compare with threshold.
+    df = data.loc[:, ['ds']]
+    df['y'] = 1.0
+    unit_probability = run_prophet(df, date)
+    if unit_probability < threshold:
+        return None
+    # Predict real value for this day.
+    df = data.loc[:, ['ds', y_col]]
+    df.rename(axis=1, columns={y_col: 'y'})
+    return run_prophet(df, date)
 
 
 if __name__ == "__main__":
@@ -130,31 +215,27 @@ if __name__ == "__main__":
     print(data.head)
     # Idea to predict ETS is follow:
     # 1) Divide rows on 'predict units' by project and description (by complexity stages)
-    #       a) only project
-    #       b) only project and filter out old data ("only 15 events if recent" kinda rules)
+    #       a) only project => not enough, it predicts only amount of effort per day.
+    #       b) only project and filter out old data ("only 15 events if recent" kinda rules) => optimization
     #       c) project + description + filtering
     #       d) project + common part of description (like "abc" and "abd" are same, but "cab" and "abc" are different)
     # 2) Predict probability of each 'predict unit' on new day. Remove units by some threshold.
     # 3) Predict effort of selected units on this day.
     dates_to_predict = ['2021-01-06', '2021-01-08', '2021-01-11', '2021-01-12', '2021-01-13']
-    # a option
-    units = extract_units(data)
+    threshold_to_take_unit = 0.8
+    tokenizer = SameDescriptionTokenizer(data)
     prediction = pd.DataFrame()
-    project_cn = get_project_cn(data)
-    effort_cn = get_effort_cn(data)
-    # TODO to 'b' need to aggregated more accuratelly.
-    unit_histories = data.groupby(project_cn)[effort_cn].sum()  # BUT need dates as well!
-
+    unit_histories = timeit(f"Tokenize {len(data)} rows",  tokenizer.get_unit_histories)
+    logging.info(f"From {len(data)} rows got {len(unit_histories)} units")
     for date in dates_to_predict:
         day_prediction = []
         for unit, unit_data in unit_histories.items():
-            y = predict_unit(unit_data, date, 0.8)
+            y = timeit(f"Predict {tokenizer.unit_to_str(unit)}", predict_unit,
+                       unit_data, date, 'effort', threshold_to_take_unit)
             if y is not None:
-                day_prediction.append({
-                    project_cn: unit,
-                    effort_cn: y,
-                    'Date': date,
-                })
+                row = tokenizer.expand_unit_prediction(unit, y)
+                row['date'] = date
+                day_prediction.append(row)
         logging.debug(f"{date}: predicted {len(day_prediction)} rows")
         prediction.append(day_prediction)
     logging.info(prediction.describe)

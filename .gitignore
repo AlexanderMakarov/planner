@@ -1,5 +1,4 @@
 *.egg-info
 *.pyc
 data
-dump*.csv
-result.csv
+*.csv
