@@ -145,6 +145,9 @@ class Tokenizer:
     def unit_to_str(self, unit: typing.Any) -> str:
         return str(unit)
 
+    def get_not_empty_history_points(self) -> typing.List[datetime64]:
+        return self.df['ds'].unique()
+
     def dump_unit_histories(self, unit_histories: typing.Dict[typing.Any, pd.DataFrame]):
         for unit, df in unit_histories.items():
             df.to_csv(self.unit_to_str(unit) + ".csv", header=True)
@@ -154,6 +157,7 @@ class Tokenizer:
         # 1. Last occurence shouldn't be older than 30 periods.
         # 2. Max history is 60 periods.
         # 3. At least one row in result.
+        # 4. If one row it should be in last day.
         if df is None or df.empty:
             return None
         last_day = df['ds'].iloc[-1]
@@ -161,7 +165,11 @@ class Tokenizer:
             return None
         first_day = last_day_in_data - pd.to_timedelta(60 * period.value, unit="d")
         df = df.drop(df[df['ds'] < first_day].index)
-        return None if df.empty else df
+        if df.empty:
+            return None
+        if len(df) == 1 and df.iloc[0]['ds'] != last_day_in_data:
+            return None
+        return df
 
     def _separate_by_task(self):
         tasks = self.df['task'].unique()
@@ -230,7 +238,8 @@ def run_prophet(df: pd.DataFrame, date: str) -> float:
     return forecast.at[0, 'yhat']  # 0 index because only one row was asked.
 
 
-def predict_unit(data: pd.DataFrame, date: str, y_col:str, threshold: float) -> typing.Optional[pd.Index]:
+def predict_unit(data: pd.DataFrame, not_empty_history_days: typing.List[datetime64], date: str, y_col:str,
+                 threshold: float) -> typing.Optional[pd.Index]:
     # Don't predict for less than 2 data points.
     if len(data) < 2:
         return None
@@ -246,13 +255,13 @@ def predict_unit(data: pd.DataFrame, date: str, y_col:str, threshold: float) -> 
     return run_prophet(df, date)
 
 
-def predict_day(unit_histories: typing.Dict[typing.Any, pd.DataFrame], date: str, threshold_to_take_unit: float)\
-        -> typing.List[dict]:
+def predict_day(unit_histories: typing.Dict[typing.Any, pd.DataFrame], not_empty_history_days: typing.List[datetime64],
+                date: str, threshold_to_take_unit: float, threshold_not_less: float) -> typing.List[dict]:
     day_prediction = []
     for unit, unit_data in unit_histories.items():
         y = timeit(f"Predict {tokenizer.unit_to_str(unit)}", predict_unit,
-                    unit_data, date, 'effort', threshold_to_take_unit)
-        if y is not None:
+                   unit_data, not_empty_history_days, date, 'effort', threshold_to_take_unit)
+        if y is not None and y >= threshold_not_less:
             row = tokenizer.expand_unit_prediction(unit, y)
             row['date'] = date
             day_prediction.append(row)
@@ -280,12 +289,15 @@ if __name__ == "__main__":
     dates_to_predict = ['2021-01-06', '2021-01-08', '2021-01-11', '2021-01-12', '2021-01-13']
     period = Period.DAILY
     threshold_to_take_unit = 0.8
+    threshold_not_less = 0.25
     tokenizer = SameDescriptionTokenizer(data)
     prediction = pd.DataFrame()
     unit_histories = timeit(f"Tokenize {len(data)} rows",  tokenizer.get_unit_histories, period)
+    not_empty_history_days = tokenizer.get_not_empty_history_points()
     logging.info(f"From {len(data)} rows got {len(unit_histories)} units")
     for date in dates_to_predict:
-        day_prediction = timeit(f"Predict {date}", predict_day, unit_histories, date, threshold_to_take_unit)
+        day_prediction = timeit(f"Predict {date}", predict_day, unit_histories, date, threshold_to_take_unit,
+                                threshold_not_less)
         logging.debug(f"{date}: predicted {len(day_prediction)} rows")
         prediction.append(day_prediction)
     logging.info(prediction.describe)
