@@ -148,6 +148,9 @@ class Tokenizer:
     def get_not_empty_history_points(self) -> typing.List[datetime64]:
         return self.df['ds'].unique()
 
+    def get_max_effort(self, unit_histories: typing.Dict[typing.Any, pd.DataFrame]) -> float:
+        return max((x['effort'].max() for x in unit_histories.values()))
+
     def dump_unit_histories(self, unit_histories: typing.Dict[typing.Any, pd.DataFrame]):
         for unit, df in unit_histories.items():
             df.to_csv(self.unit_to_str(unit) + ".csv", header=True)
@@ -238,31 +241,25 @@ def run_prophet(df: pd.DataFrame, date: str) -> float:
     return forecast.at[0, 'yhat']  # 0 index because only one row was asked.
 
 
-def predict_unit(data: pd.DataFrame, not_empty_history_days: typing.List[datetime64], date: str, y_col:str,
-                 threshold: float) -> typing.Optional[pd.Index]:
-    # Don't predict for less than 2 data points.
-    if len(data) < 2:
-        return None
-    # Predict probability of unit for this day and compare with threshold.
-    df = data.loc[:, ['ds']]
-    df['y'] = 1.0
-    unit_probability = run_prophet(df, date)
-    if unit_probability < threshold:
-        return None
-    # Predict real value for this day.
-    df = data.loc[:, ['ds', y_col]]
-    df.rename(columns={y_col: 'y'}, inplace=True)
+def predict_unit(data: pd.DataFrame, date: str, not_empty_history_days: typing.List[datetime64],
+                 y_col:str, threshold: float) -> typing.Optional[pd.Index]:
+    # Add '0' to all days because we expect that if day exists in dataset then it should be full.
+    # If don't add those '0' then model will approximate graph between 2 not adjusted points.
+    df = data.loc[:, ['ds', y_col]].rename(columns={y_col: 'y'})
+    days_to_fill = set(not_empty_history_days) - set(data['ds'].to_list())
+    df = df.append([{'ds': x, 'y': 0} for x in days_to_fill])
     return run_prophet(df, date)
 
 
-def predict_day(unit_histories: typing.Dict[typing.Any, pd.DataFrame], not_empty_history_days: typing.List[datetime64],
-                date: str, threshold_to_take_unit: float, threshold_not_less: float) -> typing.List[dict]:
+def predict_day(unit_histories: typing.Dict[typing.Any, pd.DataFrame], date: str,
+                not_empty_history_days: typing.List[datetime64], max_effort: float,
+                threshold_to_take_unit: float, threshold_not_less: float) -> typing.List[dict]:
     day_prediction = []
     for unit, unit_data in unit_histories.items():
         y = timeit(f"Predict {tokenizer.unit_to_str(unit)}", predict_unit,
-                   unit_data, not_empty_history_days, date, 'effort', threshold_to_take_unit)
+                   unit_data, date, not_empty_history_days, 'effort', threshold_to_take_unit)
         if y is not None and y >= threshold_not_less:
-            row = tokenizer.expand_unit_prediction(unit, y)
+            row = tokenizer.expand_unit_prediction(unit, min(y, max_effort))
             row['date'] = date
             day_prediction.append(row)
     return day_prediction
@@ -290,15 +287,23 @@ if __name__ == "__main__":
     period = Period.DAILY
     threshold_to_take_unit = 0.8
     threshold_not_less = 0.25
+    max_effort = 2.0
     tokenizer = SameDescriptionTokenizer(data)
     prediction = pd.DataFrame()
     unit_histories = timeit(f"Tokenize {len(data)} rows",  tokenizer.get_unit_histories, period)
+    max_effort = tokenizer.get_max_effort(unit_histories)
     not_empty_history_days = tokenizer.get_not_empty_history_points()
     logging.info(f"From {len(data)} rows got {len(unit_histories)} units")
     for date in dates_to_predict:
-        day_prediction = timeit(f"Predict {date}", predict_day, unit_histories, date, threshold_to_take_unit,
-                                threshold_not_less)
+        day_prediction = timeit(f"Predict {date}", predict_day, unit_histories, date, not_empty_history_days,
+                                max_effort, threshold_to_take_unit, threshold_not_less)
         logging.debug(f"{date}: predicted {len(day_prediction)} rows")
         prediction.append(day_prediction)
     logging.info(prediction.describe)
+    # TODO
+    # - Doesn't dump result (empty file)
+    # - Need quantisize results by 0.25
+    # - Measure full process for one day - looks like it takes few seconds.
+    # - Predict only one day - too long.
+    # - Limit Prophet logging - it is useful but not controlled.
     prediction.to_csv(RESULT_FILEPATH, header=True)
