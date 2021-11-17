@@ -18,6 +18,37 @@ RESULT_FILEPATH = "result.csv"
 logging.basicConfig(level=logging.DEBUG)
 
 
+# https://stackoverflow.com/a/56695622/1535127 - they only way shut up PyStan.
+class suppress_stdout_stderr(object):
+    '''
+    A context manager for doing a "deep suppression" of stdout and stderr in
+    Python, i.e. will suppress all print, even if the print originates in a
+    compiled C/Fortran sub-function.
+       This will not suppress raised exceptions, since exceptions are printed
+    to stderr just before a script exits, and after the context manager has
+    exited (at least, I think that is why it lets exceptions through).
+
+    '''
+    def __init__(self):
+        # Open a pair of null files
+        self.null_fds = [os.open(os.devnull, os.O_RDWR) for x in range(2)]
+        # Save the actual stdout (1) and stderr (2) file descriptors.
+        self.save_fds = (os.dup(1), os.dup(2))
+
+    def __enter__(self):
+        # Assign the null pointers to stdout and stderr.
+        os.dup2(self.null_fds[0], 1)
+        os.dup2(self.null_fds[1], 2)
+
+    def __exit__(self, *_):
+        # Re-assign the real stdout/stderr back to (1) and (2)
+        os.dup2(self.save_fds[0], 1)
+        os.dup2(self.save_fds[1], 2)
+        # Close the null files
+        os.close(self.null_fds[0])
+        os.close(self.null_fds[1])
+
+
 def read_ets_dumps(folder_path: str) -> typing.Dict[str, pd.DataFrame]:
     dumps = dict()
     total_start_time = datetime.datetime.now()
@@ -235,6 +266,7 @@ def timeit(name:str, func, *args) -> typing.Any:
 
 
 def run_prophet(df: pd.DataFrame, date: str) -> float:
+    # FYI: changepoint_prior_scale 0.05->0.2 doesn't affect speed.
     model = prophet.Prophet().fit(df)
     future = pd.DataFrame((pd.to_datetime(date),), columns=['ds'])
     forecast = model.predict(future)
@@ -242,26 +274,22 @@ def run_prophet(df: pd.DataFrame, date: str) -> float:
 
 
 def predict_unit(data: pd.DataFrame, date: str, not_empty_history_days: typing.List[datetime64],
-                 y_col:str, threshold: float) -> typing.Optional[pd.Index]:
-    # Add '0' to all days because we expect that if day exists in dataset then it should be full.
-    # If don't add those '0' then model will approximate graph between 2 not adjusted points.
+                 y_col:str) -> typing.Optional[pd.Index]:
+    # Add '0' to all days because we expect that if day exists in dataset then it contains all tokens.
+    # If don't add those '0' then model will approximate graph into line between 2 not adjusted points.
     df = data.loc[:, ['ds', y_col]].rename(columns={y_col: 'y'})
     days_to_fill = set(not_empty_history_days) - set(data['ds'].to_list())
     df = df.append([{'ds': x, 'y': 0} for x in days_to_fill])
-    return run_prophet(df, date)
+    with suppress_stdout_stderr():  # PyStan generates a lot of logs from cpp - so no control on it.
+        return run_prophet(df, date)
 
 
 def predict_day(unit_histories: typing.Dict[typing.Any, pd.DataFrame], date: str,
-                not_empty_history_days: typing.List[datetime64], max_effort: float,
-                threshold_to_take_unit: float, threshold_not_less: float) -> typing.List[dict]:
-    day_prediction = []
+                not_empty_history_days: typing.List[datetime64]) -> typing.Dict[typing.Any, float]:
+    day_prediction = {}
     for unit, unit_data in unit_histories.items():
-        y = timeit(f"Predict {tokenizer.unit_to_str(unit)}", predict_unit,
-                   unit_data, date, not_empty_history_days, 'effort', threshold_to_take_unit)
-        if y is not None and y >= threshold_not_less:
-            row = tokenizer.expand_unit_prediction(unit, min(y, max_effort))
-            row['date'] = date
-            day_prediction.append(row)
+        day_prediction[unit] = timeit(f"Predict {tokenizer.unit_to_str(unit)}", predict_unit,
+                                      unit_data, date, not_empty_history_days, 'effort')
     return day_prediction
 
 
@@ -283,27 +311,24 @@ if __name__ == "__main__":
     #       d) project + common part of description (like "abc" and "abd" are same, but "cab" and "abc" are different)
     # 2) Predict probability of each 'predict unit' on new day. Remove units by some threshold.
     # 3) Predict effort of selected units on this day.
-    dates_to_predict = ['2021-01-06', '2021-01-08', '2021-01-11', '2021-01-12', '2021-01-13']
+    dates_to_predict = ['2021-01-06']  #TODO ['2021-01-06', '2021-01-08', '2021-01-11', '2021-01-12', '2021-01-13']
     period = Period.DAILY
-    threshold_to_take_unit = 0.8
     threshold_not_less = 0.25
     max_effort = 2.0
     tokenizer = SameDescriptionTokenizer(data)
-    prediction = pd.DataFrame()
+    result = []
     unit_histories = timeit(f"Tokenize {len(data)} rows",  tokenizer.get_unit_histories, period)
     max_effort = tokenizer.get_max_effort(unit_histories)
     not_empty_history_days = tokenizer.get_not_empty_history_points()
     logging.info(f"From {len(data)} rows got {len(unit_histories)} units")
     for date in dates_to_predict:
-        day_prediction = timeit(f"Predict {date}", predict_day, unit_histories, date, not_empty_history_days,
-                                max_effort, threshold_to_take_unit, threshold_not_less)
+        day_prediction = timeit(f"Predict {date}", predict_day, unit_histories, date, not_empty_history_days)
         logging.debug(f"{date}: predicted {len(day_prediction)} rows")
-        prediction.append(day_prediction)
-    logging.info(prediction.describe)
-    # TODO
-    # - Doesn't dump result (empty file)
-    # - Need quantisize results by 0.25
-    # - Measure full process for one day - looks like it takes few seconds.
-    # - Predict only one day - too long.
-    # - Limit Prophet logging - it is useful but not controlled.
-    prediction.to_csv(RESULT_FILEPATH, header=True)
+        for unit, y in day_prediction.items():
+            if y is not None and y >= threshold_not_less:
+                y_quantized = int(y * 4) * 0.25  # Quantize to 0.25.
+                row = tokenizer.expand_unit_prediction(unit, min(y_quantized, max_effort))
+                row['date'] = date
+                result.append(row)
+    logging.info("\n".join(str(x) for x in result))
+    pd.DataFrame(result).to_csv(RESULT_FILEPATH, header=True)
