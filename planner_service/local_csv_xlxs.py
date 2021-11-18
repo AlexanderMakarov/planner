@@ -194,6 +194,8 @@ class Tokenizer:
         # 4. If one row it should be in last day.
         if df is None or df.empty:
             return None
+        if len(df) == 1 and df.iloc[0]['ds'] != last_day_in_data:  # Check it twice to speed up.
+            return None
         last_day = df['ds'].iloc[-1]
         if (last_day_in_data - last_day).days > 30 * period.value:
             return None
@@ -267,7 +269,10 @@ def timeit(name:str, func, *args) -> typing.Any:
 
 def run_prophet(df: pd.DataFrame, date: str) -> float:
     # FYI: changepoint_prior_scale 0.05->0.2 doesn't affect speed.
-    model = prophet.Prophet().fit(df)
+    # 6x speed up with uncertainty_samples=None.
+    # For more see https://towardsdatascience.com/how-to-run-facebook-prophet-predict-x100-faster-cce0282ca77d
+    pf = prophet.Prophet(uncertainty_samples=None)
+    model = timeit(f"Train", pf.fit, df)
     future = pd.DataFrame((pd.to_datetime(date),), columns=['ds'])
     forecast = model.predict(future)
     return forecast.at[0, 'yhat']  # 0 index because only one row was asked.
@@ -275,11 +280,16 @@ def run_prophet(df: pd.DataFrame, date: str) -> float:
 
 def predict_unit(data: pd.DataFrame, date: str, not_empty_history_days: typing.List[datetime64],
                  y_col:str) -> typing.Optional[pd.Index]:
-    # Add '0' to all days because we expect that if day exists in dataset then it contains all tokens.
-    # If don't add those '0' then model will approximate graph into line between 2 not adjusted points.
     df = data.loc[:, ['ds', y_col]].rename(columns={y_col: 'y'})
-    days_to_fill = set(not_empty_history_days) - set(data['ds'].to_list())
-    df = df.append([{'ds': x, 'y': 0} for x in days_to_fill])
+    # If df for single row then this row is last. To make Propher predict it next day and with the same 'y' need make
+    # line, i.e. add the same 'y' to previous day.
+    if len(df) == 1:
+        df = df.append([{'ds': not_empty_history_days[-2], 'y': df.iloc[0]['y']}])
+    else:
+        # Add '0' to all days between spare events. We expect that if day exists in dataset then it contains all tokens.
+        # If don't add those '0' then model will approximate graph into line between 2 not adjusted points.
+        days_to_fill = set(x for x in not_empty_history_days if x > df.iloc[0]['ds']) - set(data['ds'].to_list())
+        df = df.append([{'ds': x, 'y': 0} for x in days_to_fill])
     with suppress_stdout_stderr():  # PyStan generates a lot of logs from cpp - so no control on it.
         return run_prophet(df, date)
 
@@ -297,7 +307,8 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         folder_path = sys.argv[1]
         #folder_path = "/home/i4ellendger/code/planner/data/old reports/2020/min"
-        data = read_ets_dumps_and_merge(folder_path)
+        #folder_path = "/home/i4ellendger/code/planner/data/old reports/2021/min"
+        data = timeit(f"Read and prepared {folder_path}", read_ets_dumps_and_merge, folder_path)
         data.to_csv(DUMP_FILEPATH, index=False)
     else:
         data = pd.read_csv(DUMP_FILEPATH, header=0)
@@ -311,7 +322,7 @@ if __name__ == "__main__":
     #       d) project + common part of description (like "abc" and "abd" are same, but "cab" and "abc" are different)
     # 2) Predict probability of each 'predict unit' on new day. Remove units by some threshold.
     # 3) Predict effort of selected units on this day.
-    dates_to_predict = ['2021-01-06']  #TODO ['2021-01-06', '2021-01-08', '2021-01-11', '2021-01-12', '2021-01-13']
+    dates_to_predict = ['2021-03-01']  #TODO ['2021-01-06', '2021-01-08', '2021-01-11', '2021-01-12', '2021-01-13']
     period = Period.DAILY
     threshold_not_less = 0.25
     max_effort = 2.0
