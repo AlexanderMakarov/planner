@@ -10,6 +10,7 @@ import enum
 import difflib
 from pandas.core.base import DataError
 import prophet
+#import marisa_trie
 
 
 
@@ -207,7 +208,7 @@ class Tokenizer:
             return None
         return df
 
-    def _separate_by_task(self):
+    def _separate_by_task(self) -> typing.Dict[str, pd.DataFrame]:
         tasks = self.df['task'].unique()
         return dict((x, self.df[self.df['task'] == x]) for x in tasks)
 
@@ -245,19 +246,61 @@ class SimilarDescriptionTokenizer(Tokenizer):
     def __init__(self, df: pd.DataFrame):
         super().__init__(df)
 
-    def find_similar_descriptions(df: pd.DataFrame) -> typing.List[str]:
-        return None
+    def _find_histories(self, df: pd.DataFrame, period: Period, last_day_in_data:str)\
+                        -> typing.List[typing.Tuple[str, pd.DataFrame]]:
+        # 1) Extract descriptions and sort by len. It will be more efficient for search 'startswith'.
+        # 2) Search with 'startswith'. Rebuild list each iteration because `del list[i]` is O(n).
+        #descs = sorted([x.lower() for x in df['description'].to_list()], key=len)  # O(nlogn)
+        descs = sorted((df['description'].str.lower()).to_list(), key=len)  # O(nlogn)
+        # trie = marisa_trie.Trie(descs)
+        # df.apply(lambda x: trie[df['description']], axis=1)
+        prefixes = []
+        while len(descs) > 1:  # O(n*n) .. O(n)
+            prefix = descs[0]
+            prefixes.append(prefix)
+            copy = descs[1:].copy()
+            # Rebuild list with filtering out found prefixes.
+            descs = []
+            for desc in copy:
+                if not desc.startswith(prefix):
+                    descs.append(desc)
+        # Build resulting list of tuples. For unit use last description in history (latest by time).
+        result = []
+        for prefix in prefixes:  # O(n*n) .. O(n)
+            history = df.loc[df['description'].str.lower().str.startswith(prefix)]
+            history = self._limit_history_by_period(history, last_day_in_data, period)
+            if history is not None:
+                result.append((history['description'].iloc[-1], history))
+        return result
 
-    def get_unit_histories(self) -> typing.Dict[str, pd.DataFrame]:
+    def get_unit_histories(self, period: Period) -> typing.Dict[str, pd.DataFrame]:
         result = dict()
-        for task, df in self._separate_by_task():
+        last_day_in_data = self.df['ds'].iloc[-1]
+        for task, df in self._separate_by_task().items():
             # TODO
             # https://github.com/seatgeek/thefuzz
             # https://docs.python.org/3/library/difflib.html
             # df[df['var1'].str.contains('A|B')] - filter by "contains A or B"
-            for desc in self.find_similar_descriptions(df):
-                result[(task, desc), df[df['description'].str.startswith(desc)]]
+            # TODO
+            # thefuzz uses difflib, so it is quite slow. https://rawgit.com/ztane/python-Levenshtein is written in C.
+            # Need not only difference ratio, but general unit to use in result.
+            # It make sense to iterate in "from new to old" direction because of it.
+            # One extra word (one more meeting or Jira ID) may make difference. But sometimes extra sentence is OK.
+            # BTW Jaro-Winkler may work well without extra sentencies in ETS.
+            # https://medium.com/@appaloosastore/string-similarity-algorithms-compared-3f7b4d12f0ff
+            # TODO
+            # Due to last statement better compare starts of string. If one string is common for few and it
+            # was used as a separate description then string are common, both ETS and buying list.
+            for desc, history in self._find_histories(df, period, last_day_in_data):
+                result[(task, desc)] = history
         return result
+
+    def expand_unit_prediction(self, unit: typing.Any, y: float) -> dict:
+        return {
+            'task': unit[0],
+            'effort': y,
+            'description': unit[1]
+        }
 
 
 def timeit(name:str, func, *args) -> typing.Any:
@@ -311,7 +354,7 @@ if __name__ == "__main__":
         data = timeit(f"Read and prepared {folder_path}", read_ets_dumps_and_merge, folder_path)
         data.to_csv(DUMP_FILEPATH, index=False)
     else:
-        data = pd.read_csv(DUMP_FILEPATH, header=0)
+        data = pd.read_csv("dump_2020min.csv", header=0)#DUMP_FILEPATH, header=0)
         data['ds'] = pd.DatetimeIndex(data['ds'])
     print(data.head)
     # Idea to predict ETS is follow:
@@ -322,13 +365,14 @@ if __name__ == "__main__":
     #       d) project + common part of description (like "abc" and "abd" are same, but "cab" and "abc" are different)
     # 2) Predict probability of each 'predict unit' on new day. Remove units by some threshold.
     # 3) Predict effort of selected units on this day.
-    dates_to_predict = ['2021-03-01']  #TODO ['2021-01-06', '2021-01-08', '2021-01-11', '2021-01-12', '2021-01-13']
+    # dates_to_predict = '2021-03-01' ['2021-01-06', '2021-01-08', '2021-01-11', '2021-01-12', '2021-01-13']
+    dates_to_predict = ['2021-01-06']
     period = Period.DAILY
     threshold_not_less = 0.25
     max_effort = 2.0
-    tokenizer = SameDescriptionTokenizer(data)
+    tokenizer = SimilarDescriptionTokenizer(data)
     result = []
-    unit_histories = timeit(f"Tokenize {len(data)} rows",  tokenizer.get_unit_histories, period)
+    unit_histories = timeit(f"Tokenize {len(data)} rows with {tokenizer}",  tokenizer.get_unit_histories, period)
     max_effort = tokenizer.get_max_effort(unit_histories)
     not_empty_history_days = tokenizer.get_not_empty_history_points()
     logging.info(f"From {len(data)} rows got {len(unit_histories)} units")
@@ -341,5 +385,5 @@ if __name__ == "__main__":
                 row = tokenizer.expand_unit_prediction(unit, min(y_quantized, max_effort))
                 row['date'] = date
                 result.append(row)
-    logging.info("\n".join(str(x) for x in result))
+    logging.info("\n" + "\n".join(str(x) for x in result))
     pd.DataFrame(result).to_csv(RESULT_FILEPATH, header=True)
