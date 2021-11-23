@@ -1,6 +1,7 @@
-pandas
-openpyxl
-xlrd
+# numpy
+# pandas
+# openpyxl
+# xlrd
 pystan==2.19.1.1
 prophet
 # marisa-trie # datrie faster but requires predifined leaf values
